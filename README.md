@@ -27,5 +27,11 @@ This GitHub Pages demo currently stores demo-state data in browser `localStorage
 The default administrator login is `admin` / `1111111`. Existing custom admin passwords stored in the browser remain valid.
 
 
+## V23 cloud sync
+- Added the supplied Supabase project URL/publishable key to the static frontend.
+- Added cloud snapshot synchronization so the existing Admin Portal data can be shared between PC and mobile without changing the existing UI/data model.
+- Run `supabase/11_cloud_state_sync.sql` once in Supabase SQL Editor before deploying this build.
+- On the first Admin login from a device that has the existing local data, that data is uploaded if the cloud snapshot is empty. Once a snapshot exists, the cloud snapshot is authoritative across devices.
+
 ## V21 mobile note
 The frontend uses browser-local storage until Supabase is connected. Admin login is intentionally portable with the institution default `admin / 1111111`. Student accounts created on another device require the Supabase-backed authentication/data layer for cross-device login; localStorage cannot synchronize student accounts between phones and desktops.
