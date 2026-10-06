@@ -7,10 +7,73 @@ const CLOUD_STATE_ID='eduiq-main';
 const supabaseClient=(window.supabase&&window.supabase.createClient)?window.supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY):null;
 let cloudReady=false,cloudBusy=false,cloudTimer=null;
 function cloudPayload(d){const x=JSON.parse(JSON.stringify(normalize(d))); delete x.student; return x}
-async function cloudRead(){if(!supabaseClient)return null;try{const {data,error}=await supabaseClient.from('eduiq_app_state').select('payload,updated_at').eq('id',CLOUD_STATE_ID).maybeSingle();if(error){console.warn('EduIQ cloud read:',error.message);return null}return data||null}catch(e){console.warn('EduIQ cloud read failed:',e);return null}}
-async function cloudWrite(d){if(!supabaseClient||cloudBusy)return;cloudBusy=true;try{const payload=cloudPayload(d);const {error}=await supabaseClient.from('eduiq_app_state').upsert({id:CLOUD_STATE_ID,payload,updated_at:new Date().toISOString()},{onConflict:'id'});if(error)console.warn('EduIQ cloud write:',error.message);else cloudReady=true}catch(e){console.warn('EduIQ cloud write failed:',e)}finally{cloudBusy=false}}
-function queueCloudWrite(d){clearTimeout(cloudTimer);cloudTimer=setTimeout(()=>cloudWrite(d),250)}
-async function hydrateFromCloud({preferCloud=true}={}){if(!supabaseClient)return false;const row=await cloudRead();if(row?.payload&&preferCloud){const local=get();const merged=normalize({...row.payload,student:local.student});localStorage[STORAGE_KEY]=JSON.stringify(merged);cloudReady=true;return true}if(!row?.payload){await cloudWrite(get());return true}return false}
+function hasRealData(d){
+  const x=normalize(d);
+  return (x.students||[]).length>0 || (x.courses||[]).length>0 || (x.classes||[]).length>0 ||
+    (x.academic||[]).length>0 || (x.results||[]).length>0 || (x.attendanceRecords||[]).length>0 ||
+    (x.schedule||[]).length>0 || Object.keys(x.classSchedules||{}).length>0 ||
+    (x.notifications||[]).length>0 || (x.events||[]).length>0 || (x.announcements||[]).length>0 ||
+    Object.keys(x.studentFees||{}).length>0 || Number(x.fees?.total||0)>0 || Number(x.fees?.paid||0)>0;
+}
+function cloudHasRealData(payload){try{return hasRealData(payload||{})}catch(e){return false}}
+function dataScore(d){const x=normalize(d||{});return (x.students?.length||0)*20+(x.courses?.length||0)*10+(x.classes?.length||0)*10+(x.academic?.length||0)*3+(x.results?.length||0)*3+(x.attendanceRecords?.length||0)*3+(x.schedule?.length||0)*2+Object.keys(x.classSchedules||{}).length*2+(x.notifications?.length||0)+(x.events?.length||0)+(x.announcements?.length||0)+Object.keys(x.studentFees||{}).length*3+(Number(x.fees?.total||0)>0?2:0)}
+async function cloudRead(){
+  if(!supabaseClient)return null;
+  try{
+    const {data,error}=await supabaseClient.from('eduiq_app_state').select('payload,updated_at').eq('id',CLOUD_STATE_ID).maybeSingle();
+    if(error){console.warn('EduIQ cloud read:',error.message);return null}
+    return data||null;
+  }catch(e){console.warn('EduIQ cloud read failed:',e);return null}
+}
+async function cloudWrite(d){
+  if(!supabaseClient||cloudBusy)return false;
+  cloudBusy=true;
+  try{
+    const payload=cloudPayload(d);
+    const {error}=await supabaseClient.from('eduiq_app_state').upsert({id:CLOUD_STATE_ID,payload,updated_at:new Date().toISOString()},{onConflict:'id'});
+    if(error){console.warn('EduIQ cloud write:',error.message);return false}
+    cloudReady=true;
+    return true;
+  }catch(e){console.warn('EduIQ cloud write failed:',e);return false}
+  finally{cloudBusy=false}
+}
+function queueCloudWrite(d){
+  if(!hasRealData(d))return;
+  clearTimeout(cloudTimer);
+  cloudTimer=setTimeout(()=>cloudWrite(d),500);
+}
+async function hydrateFromCloud({preferCloud=true}={}){
+  if(!supabaseClient)return false;
+  const local=get();
+  const row=await cloudRead();
+  const cloudData=row?.payload||null;
+  if(cloudData&&cloudHasRealData(cloudData)){
+    // During the first migration, prefer the richer local dataset (normally the
+    // existing PC copy) so a seed/partial snapshot can never wipe real records.
+    // Once both copies are populated, the cloud remains the cross-device source.
+    const localScore=dataScore(local), cloudScore=dataScore(cloudData);
+    const migrationNeeded=hasRealData(local) && localScore>cloudScore;
+    if(migrationNeeded){
+      const ok=await cloudWrite(local);
+      if(ok)cloudReady=true;
+      return ok;
+    }
+    if(preferCloud){
+      const merged=normalize({...cloudData,student:local.student});
+      localStorage[STORAGE_KEY]=JSON.stringify(merged);
+      cloudReady=true;
+    }
+    return true;
+  }
+  // Never let a fresh device's empty seed overwrite an institution's real data.
+  // If this device contains the real PC data and the cloud is empty/seed-only,
+  // bootstrap the cloud from this device.
+  if(hasRealData(local)){
+    const ok=await cloudWrite(local);
+    return ok;
+  }
+  return !!cloudData;
+}
 async function prepareCloud(){if(!supabaseClient)return;await hydrateFromCloud({preferCloud:true});}
 
 const normalize=(raw)=>{const d=raw||JSON.parse(JSON.stringify(seed));d.student=d.student||null;d.courses=Array.isArray(d.courses)?d.courses:[];d.schedule=Array.isArray(d.schedule)?d.schedule:[];d.classSchedules=d.classSchedules&&typeof d.classSchedules==='object'?d.classSchedules:{};d.classes=Array.isArray(d.classes)?d.classes.map(c=>({...c,students:Number(c.students??0),subjects:Number(c.subjects??0),attendance:Number(c.attendance??0)})):[];d.students=Array.isArray(d.students)?d.students:[];d.attendanceRecords=Array.isArray(d.attendanceRecords)?d.attendanceRecords:[];d.academic=Array.isArray(d.academic)?d.academic:[];d.results=Array.isArray(d.results)?d.results:[];d.studentFees=d.studentFees&&typeof d.studentFees==='object'?d.studentFees:{};d.notifications=Array.isArray(d.notifications)?d.notifications:[];d.events=Array.isArray(d.events)?d.events:[];d.announcements=Array.isArray(d.announcements)?d.announcements:[];d.attendance=d.attendance&&typeof d.attendance==='object'?d.attendance:{overall:0,subjects:[]};d.attendance.overall=Number(d.attendance.overall||0);d.attendance.subjects=Array.isArray(d.attendance.subjects)?d.attendance.subjects:[];d.students.forEach(st=>{if(!d.studentFees[st.id])d.studentFees[st.id]={total:0,entries:[],assigned:false};d.studentFees[st.id].total=Number(d.studentFees[st.id].total||0);d.studentFees[st.id].entries=Array.isArray(d.studentFees[st.id].entries)?d.studentFees[st.id].entries:[];if(typeof d.studentFees[st.id].assigned!=='boolean')d.studentFees[st.id].assigned=d.studentFees[st.id].total>0});const main=d.student?d.students.find(x=>x.admissionNo===d.student.admissionNo):null;d.fees={total:Number(main?d.studentFees[main.id].total:0),entries:main?(d.studentFees[main.id].entries||[]):[]};d.fees.paid=d.fees.entries.reduce((a,x)=>a+Number(x.amount||0),0);return d};

@@ -372,3 +372,139 @@
   .login-card-head p{font-size:10px}
   .input-wrap,.input-wrap input{height:50px;min-height:50px}
 }
+
+/* V26 — refined mobile hero/login composition */
+@media (max-width:760px){
+  .login-page{
+    min-height:100svh;
+    background:#f7f9fc;
+  }
+  .login-ambient{
+    height:238px;
+    min-height:238px;
+    padding:24px 22px 22px;
+    position:relative;
+    overflow:hidden;
+    background:
+      radial-gradient(125% 145% at 94% 0%,rgba(91,105,255,.28),transparent 50%),
+      radial-gradient(110% 130% at 4% 100%,rgba(109,67,238,.19),transparent 52%),
+      #07101f;
+  }
+  .login-ambient:after{
+    content:"";
+    position:absolute;
+    left:-12%;right:-12%;bottom:-42px;height:90px;
+    border-radius:50% 50% 0 0 / 70% 70% 0 0;
+    background:rgba(255,255,255,.045);
+    pointer-events:none;
+  }
+  .login-brand{gap:11px;position:relative;z-index:2}
+  .login-brand .brand-orbit,
+  .login-brand .logo-orbit-image{
+    width:44px;height:44px;border-radius:13px;
+    box-shadow:0 12px 30px rgba(49,80,230,.36);
+  }
+  .login-brand .logo-orbit-image img{width:58px;height:58px}
+  .login-brand b{font-size:18px;line-height:1.1}
+  .login-brand small{font-size:6.8px;letter-spacing:.18em;margin-top:5px}
+  .login-showcase{
+    margin:42px 0 0;
+    position:relative;z-index:2;
+  }
+  .showcase-kicker{font-size:7.5px;letter-spacing:.18em}
+  .login-showcase h1{
+    font-size:31px;
+    line-height:1.06;
+    letter-spacing:-.04em;
+    margin:9px 0 0;
+    max-width:350px;
+  }
+  .login-side-note{
+    left:22px;bottom:18px;
+    font-size:6.5px;
+    z-index:3;
+  }
+
+  .login-panel{
+    position:relative;
+    z-index:5;
+    margin-top:-18px;
+    min-height:calc(100svh - 220px);
+    padding:0 22px 22px;
+    border-radius:30px 30px 0 0;
+    box-shadow:0 -14px 42px rgba(7,16,31,.13);
+    overflow:auto;
+  }
+  .login-panel-top{
+    height:62px;
+    margin:0;
+    padding:0;
+  }
+  .mode-switch{
+    padding:4px;
+    border-radius:13px;
+  }
+  .mode-switch button{
+    min-width:68px;
+    height:34px;
+    border-radius:9px;
+    font-size:10.5px;
+  }
+  .login-card{
+    max-width:430px;
+    padding:10px 0 56px;
+  }
+  .login-card-head{margin-bottom:25px}
+  .login-card .eyebrow{font-size:8.5px;margin-bottom:9px}
+  .login-card h2{
+    font-size:29px;
+    line-height:1.08;
+    letter-spacing:-.035em;
+    margin-bottom:8px;
+  }
+  .login-card-head p{
+    font-size:11.5px;
+    line-height:1.55;
+    max-width:390px;
+  }
+  .login-card label{
+    font-size:10.5px;
+    margin-bottom:16px;
+  }
+  .input-wrap,
+  .input-wrap input{height:54px;min-height:54px}
+  .input-wrap{border-radius:13px;margin-top:9px}
+  .input-wrap input{
+    font-size:14px!important;
+    padding:0 15px!important;
+  }
+  .password-toggle{height:52px;min-width:48px}
+  .login-options{margin-bottom:20px}
+  .login-options .check,.login-options .linkbtn{font-size:9.5px}
+  .login-submit{
+    height:54px;min-height:54px;
+    border-radius:13px;
+    padding-left:18px;padding-right:13px;
+    font-size:12.5px;
+  }
+  .login-submit b{width:34px;height:34px;border-radius:10px}
+  .credential-note{
+    margin-top:15px;
+    padding:12px 13px;
+    border-radius:12px;
+  }
+  .credential-note b{font-size:9px}
+  .credential-note small{font-size:7.8px;line-height:1.5}
+  .login-footer{bottom:9px;font-size:6.5px}
+}
+
+@media (max-width:380px){
+  .login-ambient{height:224px;min-height:224px;padding-left:18px;padding-right:18px}
+  .login-showcase{margin-top:36px}
+  .login-showcase h1{font-size:28px;max-width:330px}
+  .login-side-note{left:18px;bottom:16px}
+  .login-panel{margin-top:-16px;padding-left:18px;padding-right:18px;border-radius:27px 27px 0 0}
+  .login-panel-top{height:58px}
+  .login-card h2{font-size:27px}
+  .login-card-head p{font-size:10.5px}
+}

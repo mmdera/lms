@@ -35,3 +35,11 @@ The default administrator login is `admin` / `1111111`. Existing custom admin pa
 
 ## V21 mobile note
 The frontend uses browser-local storage until Supabase is connected. Admin login is intentionally portable with the institution default `admin / 1111111`. Student accounts created on another device require the Supabase-backed authentication/data layer for cross-device login; localStorage cannot synchronize student accounts between phones and desktops.
+
+
+## V25 cloud sync reliability fix
+- A fresh mobile device no longer writes the empty seed dataset to Supabase.
+- The existing PC dataset is automatically used to bootstrap the cloud when the cloud is empty or seed-only.
+- If a cloud snapshot exists but is clearly smaller than the existing PC dataset, the richer PC dataset wins during migration.
+- Once populated, mobile/PC devices load the same cloud snapshot.
+- The Supabase table `eduiq_app_state` must exist; run `supabase/11_cloud_state_sync.sql` once in Supabase SQL Editor.
