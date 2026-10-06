@@ -21,3 +21,11 @@ Push the contents of this ZIP to your repository. The included GitHub Actions wo
 
 ## Important
 This GitHub Pages demo currently stores demo-state data in browser `localStorage`. For production multi-user access, connect the supplied Supabase schema/RLS/storage setup and replace the local data adapter with Supabase calls.
+
+
+## V20 login fix
+The default administrator login is `admin` / `1111111`. Existing custom admin passwords stored in the browser remain valid.
+
+
+## V21 mobile note
+The frontend uses browser-local storage until Supabase is connected. Admin login is intentionally portable with the institution default `admin / 1111111`. Student accounts created on another device require the Supabase-backed authentication/data layer for cross-device login; localStorage cannot synchronize student accounts between phones and desktops.
