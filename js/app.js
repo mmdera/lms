@@ -2,7 +2,7 @@ const seed={adminPassword:'EduIQ#2026',mustChangeAdminPassword:true,student:null
 
 // EduIQ cloud sync: one shared application state for the same institution across devices.
 const SUPABASE_URL='https://pejsubxbgbcsfvjwsyes.supabase.co';
-const SUPABASE_ANON_KEY='sb_publishable_62lxPzFVXCvGBWzON-mzRg_t0r5jW-Wg';
+const SUPABASE_ANON_KEY='sb_publishable_62lxPzFVXCvGBWzON-mzRg_t0r5j-W';
 const CLOUD_STATE_ID='eduiq-main';
 const CLOUD_TABLE_URL=SUPABASE_URL+'/rest/v1/eduiq_app_state';
 const CLOUD_HEADERS={'apikey':SUPABASE_ANON_KEY,'Content-Type':'application/json'};

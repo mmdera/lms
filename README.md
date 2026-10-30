@@ -61,3 +61,10 @@ If cloud access reports a database/table error, run `supabase/11_cloud_state_syn
 - Added `?v=30` cache-busting to the app JS and stylesheet references.
 
 After deploying, hard-refresh each device (Ctrl+Shift+R) once. No database reset is required.
+
+
+## V31 publishable API key correction
+- Corrected the frontend publishable API key to exactly match the key supplied and successfully tested by the user.
+- V30 had an extra/misplaced character in the configured key, which caused the LMS to receive `Invalid API key` even though the direct diagnostic request succeeded.
+- Updated asset query versions to force browsers to fetch the corrected JavaScript and CSS.
+- No database reset or SQL changes are required for this key correction.
