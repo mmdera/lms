@@ -1,45 +1,30 @@
-# EduIQ LMS — V16
+# EduIQ LMS — V26
 
-GitHub Pages-ready EduIQ LMS build.
+GitHub Pages-ready EduIQ LMS build. V26 establishes a single authoritative Supabase snapshot for all devices and includes an institution-wide cloud reset script.
 
-## V16 fix
-- Fixed the blank **My Profile** page caused by missing profile renderer functions.
-- Student profile now shows institution-issued identity, course/class/roll details and editable phone, email, DOB and address.
-- Student password change is available directly from **My Profile**.
-- First-login **Change password** button now redirects to the profile and opens the password-change dialog automatically.
-- Administrator profile is also fully rendered with editable display name/email and password change.
-- Existing academic, timetable, history, fee, attendance and student-management functionality from V15 is retained.
+## V26 changes
+- Existing Supabase cloud snapshot is authoritative even when it contains an empty/reset payload. Old browser caches can no longer repopulate records after the reset.
+- Administrator password is stored in the shared application snapshot, so an administrator password change is shared across devices.
+- Fresh administrator credentials: **Admin ID `admin` / Password `EduIQ#2026`**. The first sign-in prompts the administrator to change this password.
+- Admin Portal → Students → Add student continues to issue a unique admission number and initial password. The first new student after reset receives **`EDUIQ/2026/0001` / `Student@0001`**. Later students increment the serial.
+- Student creation, edits, credentials, attendance, fee and academic data are synchronized through the same cloud snapshot.
 
-## Local demo
+## Required one-time Supabase setup
+1. Open the Supabase project configured in `js/app.js`.
+2. In **SQL Editor**, run `supabase/11_cloud_state_sync.sql` if the `eduiq_app_state` table and policies have not already been created.
+3. Review the destructive warning in `supabase/12_reset_eduiq_cloud.sql`, then run it once to clear the shared EduIQ app data and reset the administrator password. This creates an authoritative empty snapshot so stale PCs cannot restore old data.
+4. Deploy this V26 build to GitHub Pages / your hosting provider.
+5. Open the deployed app on each device and sign in with the administrator credentials above. Add students from **Admin Portal → Students → Add student**; issue each student their generated admission number and password.
+
+**Important:** The reset SQL clears the V26 frontend's shared `eduiq_app_state` snapshot. It does not delete Supabase Auth users or records in the separate normalized tables from `01_schema.sql`. Those are not used by this frontend data adapter.
+
+## Local development
 ```bash
 npm install
 npm run dev
 ```
 
-## GitHub Pages
-Push the contents of this ZIP to your repository. The included GitHub Actions workflow builds and deploys the Vite app to GitHub Pages.
+## Cross-device and security note
+This version is a compatibility bridge for the existing static frontend. `11_cloud_state_sync.sql` grants anonymous read/write access to the shared JSON snapshot, and the current frontend stores student/admin passwords in that snapshot. It is suitable only for a controlled demo/test environment, **not production storage of real student personal information or credentials**. A production deployment needs Supabase Auth, server-side credential verification (for example an Edge Function), and per-role RLS policies; never expose a service-role key in frontend code.
 
-## Important
-This GitHub Pages demo currently stores demo-state data in browser `localStorage`. For production multi-user access, connect the supplied Supabase schema/RLS/storage setup and replace the local data adapter with Supabase calls.
-
-
-## V20 login fix
-The default administrator login is `admin` / `1111111`. Existing custom admin passwords stored in the browser remain valid.
-
-
-## V23 cloud sync
-- Added the supplied Supabase project URL/publishable key to the static frontend.
-- Added cloud snapshot synchronization so the existing Admin Portal data can be shared between PC and mobile without changing the existing UI/data model.
-- Run `supabase/11_cloud_state_sync.sql` once in Supabase SQL Editor before deploying this build.
-- On the first Admin login from a device that has the existing local data, that data is uploaded if the cloud snapshot is empty. Once a snapshot exists, the cloud snapshot is authoritative across devices.
-
-## V21 mobile note
-The frontend uses browser-local storage until Supabase is connected. Admin login is intentionally portable with the institution default `admin / 1111111`. Student accounts created on another device require the Supabase-backed authentication/data layer for cross-device login; localStorage cannot synchronize student accounts between phones and desktops.
-
-
-## V25 cloud sync reliability fix
-- A fresh mobile device no longer writes the empty seed dataset to Supabase.
-- The existing PC dataset is automatically used to bootstrap the cloud when the cloud is empty or seed-only.
-- If a cloud snapshot exists but is clearly smaller than the existing PC dataset, the richer PC dataset wins during migration.
-- Once populated, mobile/PC devices load the same cloud snapshot.
-- The Supabase table `eduiq_app_state` must exist; run `supabase/11_cloud_state_sync.sql` once in Supabase SQL Editor.
+The cross-device reset/login workflow requires the Supabase SQL setup above and a deployed build. Merely downloading the ZIP does not erase the live Supabase database.
