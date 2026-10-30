@@ -28,3 +28,19 @@ npm run dev
 This version is a compatibility bridge for the existing static frontend. `11_cloud_state_sync.sql` grants anonymous read/write access to the shared JSON snapshot, and the current frontend stores student/admin passwords in that snapshot. It is suitable only for a controlled demo/test environment, **not production storage of real student personal information or credentials**. A production deployment needs Supabase Auth, server-side credential verification (for example an Edge Function), and per-role RLS policies; never expose a service-role key in frontend code.
 
 The cross-device reset/login workflow requires the Supabase SQL setup above and a deployed build. Merely downloading the ZIP does not erase the live Supabase database.
+
+## V27 — cross-device authentication and cloud sync fix
+- Admin credential changes are now treated as shared institution data and queued for cloud sync even before students or academic records exist.
+- Login waits for a successful cloud read; database/CDN errors are shown as cloud errors rather than misleading "Invalid credentials" messages.
+- A clean first device can bootstrap the shared snapshot when the administrator signs in; a clean secondary device cannot overwrite the institution snapshot.
+- After deployment, sign in on the main laptop once while online, then use the same credentials on other devices.
+
+If cloud access reports a database/table error, run `supabase/11_cloud_state_sync.sql` in the configured Supabase project's SQL Editor and verify the project URL/key in `js/app.js`.
+
+## V28 — persistent login across refresh
+
+- Login state is now stored in browser `localStorage` instead of relying only on `sessionStorage`.
+- On page reload, the app waits for the shared cloud snapshot to hydrate, then restores the signed-in admin or student workspace and last visited page.
+- Student sessions are restored only if the matching admission number still exists in the current student list.
+- The Sign out button explicitly clears the persistent session. Clearing site data or using a different browser/device still requires signing in again.
+- This is a convenience session mechanism for the current demo architecture, not a substitute for server-side Supabase Auth. Anyone with access to the same unlocked browser profile may access its active session; use Sign out on shared computers.

@@ -5,7 +5,7 @@ const SUPABASE_URL='https://pejsubxbgbcsfvjwsyes.supabase.co';
 const SUPABASE_ANON_KEY='sb_publishable_62lxPzFVXCvGBWzON-mzRg_t0r5jW-Wg';
 const CLOUD_STATE_ID='eduiq-main';
 const supabaseClient=(window.supabase&&window.supabase.createClient)?window.supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY):null;
-let cloudReady=false,cloudBusy=false,cloudTimer=null;
+let cloudReady=false,cloudBusy=false,cloudTimer=null,cloudLastError='';
 function cloudPayload(d){const x=JSON.parse(JSON.stringify(normalize(d))); delete x.student; return x}
 function hasRealData(d){
   const x=normalize(d);
@@ -18,12 +18,13 @@ function hasRealData(d){
 function cloudHasRealData(payload){try{return hasRealData(payload||{})}catch(e){return false}}
 function dataScore(d){const x=normalize(d||{});return (x.students?.length||0)*20+(x.courses?.length||0)*10+(x.classes?.length||0)*10+(x.academic?.length||0)*3+(x.results?.length||0)*3+(x.attendanceRecords?.length||0)*3+(x.schedule?.length||0)*2+Object.keys(x.classSchedules||{}).length*2+(x.notifications?.length||0)+(x.events?.length||0)+(x.announcements?.length||0)+Object.keys(x.studentFees||{}).length*3+(Number(x.fees?.total||0)>0?2:0)}
 async function cloudRead(){
-  if(!supabaseClient)return null;
+  cloudLastError='';
+  if(!supabaseClient){cloudLastError='Supabase client did not load. Check the internet connection or CDN access.';return null;}
   try{
     const {data,error}=await supabaseClient.from('eduiq_app_state').select('payload,updated_at').eq('id',CLOUD_STATE_ID).maybeSingle();
-    if(error){console.warn('EduIQ cloud read:',error.message);return null}
+    if(error){cloudLastError=error.message||'Unable to read the shared LMS database.';console.warn('EduIQ cloud read:',cloudLastError);return null}
     return data||null;
-  }catch(e){console.warn('EduIQ cloud read failed:',e);return null}
+  }catch(e){cloudLastError=e?.message||'Unable to connect to the shared LMS database.';console.warn('EduIQ cloud read failed:',e);return null}
 }
 async function cloudWrite(d){
   if(!supabaseClient||cloudBusy)return false;
@@ -31,21 +32,28 @@ async function cloudWrite(d){
   try{
     const payload=cloudPayload(d);
     const {error}=await supabaseClient.from('eduiq_app_state').upsert({id:CLOUD_STATE_ID,payload,updated_at:new Date().toISOString()},{onConflict:'id'});
-    if(error){console.warn('EduIQ cloud write:',error.message);return false}
+    if(error){cloudLastError=error.message||'Unable to save to the shared LMS database.';console.warn('EduIQ cloud write:',cloudLastError);return false}
     cloudReady=true;
     return true;
-  }catch(e){console.warn('EduIQ cloud write failed:',e);return false}
+  }catch(e){cloudLastError=e?.message||'Unable to save to the shared LMS database.';console.warn('EduIQ cloud write failed:',e);return false}
   finally{cloudBusy=false}
 }
+function hasSyncableData(d){
+  const x=normalize(d);
+  return hasRealData(x) || String(x.adminPassword||seed.adminPassword)!==seed.adminPassword || x.mustChangeAdminPassword===false;
+}
 function queueCloudWrite(d){
-  if(!hasRealData(d)&&!cloudReady)return;
+  // Admin credential changes are institution-wide data too; sync them even
+  // before students or academic records have been created.
+  if(!hasSyncableData(d)&&!cloudReady)return;
   clearTimeout(cloudTimer);
   cloudTimer=setTimeout(()=>cloudWrite(d),500);
 }
 async function hydrateFromCloud({preferCloud=true}={}){
-  if(!supabaseClient)return false;
+  if(!supabaseClient){cloudLastError='Supabase client did not load. Check the internet connection or CDN access.';return false;}
   const local=get();
   const row=await cloudRead();
+  if(cloudLastError)return false;
   const cloudData=row?.payload||null;
   if(row){
     // An existing cloud row is authoritative even when its payload is empty.
@@ -58,14 +66,13 @@ async function hydrateFromCloud({preferCloud=true}={}){
     }
     return true;
   }
-  // Never let a fresh device's empty seed overwrite an institution's real data.
-  // If this device contains the real PC data and the cloud is empty/seed-only,
-  // bootstrap the cloud from this device.
-  if(hasRealData(local)){
+  // Bootstrap only from a device that has institution data or a changed admin
+  // credential. A clean second device must never create an empty snapshot.
+  if(hasSyncableData(local)){
     const ok=await cloudWrite(local);
     return ok;
   }
-  return !!cloudData;
+  return false;
 }
 async function prepareCloud(){if(!supabaseClient)return;await hydrateFromCloud({preferCloud:true});}
 
@@ -74,6 +81,17 @@ const LEGACY_KEYS=['eduiq_v10_clean','eduiq_v9','eduiq_v8'];
 LEGACY_KEYS.forEach(k=>localStorage.removeItem(k));
 const STORAGE_KEY='eduiq_v11_clean';
 const state={view:'login',loginMode:'student',page:'dashboard',student:false,admin:false};
+const SESSION_KEY='eduiq_persistent_session';
+function persistSession(role,admissionNo=''){localStorage.setItem(SESSION_KEY,JSON.stringify({role,admissionNo,page:state.page||'dashboard'}));}
+function clearPersistentSession(){localStorage.removeItem(SESSION_KEY);sessionStorage.removeItem('eduiqStudent');sessionStorage.removeItem('eduiqAdmin');}
+async function restorePersistentSession(){
+  let session;try{session=JSON.parse(localStorage.getItem(SESSION_KEY)||'null')}catch(e){clearPersistentSession();return false}
+  if(!session||!['admin','student'].includes(session.role))return false;
+  if(session.role==='admin'){state.admin=true;state.student=false;state.view='admin';state.page=session.page||'admin';if(!['admin','students','courses','classes','academics','attendance','fees','announcements','reports','history','profile'].includes(state.page))state.page='admin';return true;}
+  const d=get();const student=(d.students||[]).find(x=>String(x.admissionNo||'').toLowerCase()===String(session.admissionNo||'').toLowerCase());
+  if(!student){clearPersistentSession();return false;}
+  d.student={...student};localStorage.setItem(STORAGE_KEY,JSON.stringify(normalize(d)));state.student=true;state.admin=false;state.view='student';state.page=session.page||'dashboard';if(!['dashboard','schedule','assignments','homework','calendar','materials','exams','results','attendance','fees','notifications','profile'].includes(state.page))state.page='dashboard';return true;
+}
 const get=()=>{try{return normalize(JSON.parse(localStorage[STORAGE_KEY]||JSON.stringify(seed)))}catch(e){localStorage.removeItem(STORAGE_KEY);return normalize(seed)}};
 const save=d=>{const normalized=normalize(d);localStorage[STORAGE_KEY]=JSON.stringify(normalized);queueCloudWrite(normalized);return normalized};
 if(!localStorage[STORAGE_KEY])save(seed);
@@ -89,7 +107,7 @@ function login(mode='student'){const admin=mode==='admin';return `<div class="lo
 function togglePassword(){const e=document.getElementById('loginPass');if(e)e.type=e.type==='password'?'text':'password'}
 function shell(admin=false){const studentNav=[['dashboard','Dashboard','⌂'],['schedule','Schedule','▦'],['assignments','Assignments','✓'],['homework','Homework','✎'],['calendar','Calendar','□'],['materials','Study Materials','▤'],['exams','Exams & Date Sheet','▣'],['results','Results','◒'],['attendance','Attendance','◔'],['fees','Fees','₹'],['notifications','Notifications','◌'],['profile','My Profile','◎']];const adminNav=[['admin','Overview','⌂'],['students','Students','♙'],['courses','Courses','◈'],['classes','Classes','▦'],['academics','Academics','◈'],['attendance','Attendance','◔'],['fees','Fees & Deposits','₹'],['announcements','Announcements','◉'],['reports','Reports','◒'],['history','History','↺'],['profile','My Profile','◎']];const navButton=x=>`<button class="nav ${state.page===x[0]?'active':''}" onclick="go('${x[0]}')">${icon(x[2])}<span>${x[1]}</span></button>`;return `<div class="app"><aside class="side"><div class="brand"><span class="logo-mark"><img src="assets/eduiq-logo.png" alt="EduIQ"></span><div><b>EduIQ</b><small>${admin?'ADMIN CONSOLE':'LEARNING SYSTEM'}</small></div></div><div class="side-scroll">${admin?`<div class="side-section"><div class="side-label">OVERVIEW</div><nav>${navButton(adminNav[0])}</nav></div><div class="side-section section-divider"><div class="side-label">PEOPLE & STRUCTURE</div><nav>${adminNav.slice(1,5).map(navButton).join('')}</nav></div><div class="side-section section-divider"><div class="side-label">OPERATIONS</div><nav>${adminNav.slice(5,10).map(navButton).join('')}</nav></div>`:`<div class="side-section"><div class="side-label">WORKSPACE</div><nav>${studentNav.slice(0,5).map(navButton).join('')}</nav></div><div class="side-section section-divider"><div class="side-label">ACADEMICS</div><nav>${studentNav.slice(5,10).map(navButton).join('')}</nav></div>`}</div></aside><main class="main"><header class="top"><button class="mobile-menu" onclick="document.querySelector('.side').classList.toggle('open')">☰</button><div class="top-heading"><small>${admin?'ADMINISTRATION':'STUDENT PORTAL'}</small><b>${admin?'EduIQ Control Center':pageTitle()}</b></div><div class="top-right"><button class="circle" onclick="toggleTheme()" aria-label="Toggle dark or light mode" title="Toggle theme">◐</button><button class="header-logout" onclick="logout()" aria-label="Sign out" title="Sign out"><span>↪</span><b>Sign out</b></button><button class="circle notification-trigger" onclick="openNotificationCenter()" aria-label="Notifications">◌<span class="notification-badge"></span></button><div class="top-user" onclick="go('profile')"><span class="top-avatar">${admin?(localStorage.adminAvatar?`<img src="${localStorage.adminAvatar}" alt="Administrator">`:'AD'):(get().student.avatar?`<img src="${get().student.avatar}" alt="Profile photo">`:profileInitials(get().student.name))}</span><div><b>${admin?'Administrator':get().student.name}</b><small>${admin?'Institution admin':get().student.admissionNo}</small></div></div></div></header><section class="main-content" id="screen"></section></main></div>`}
 function pageTitle(){return ({dashboard:'Dashboard',schedule:'Schedule',assignments:'Assignments',homework:'Homework',calendar:'Calendar',materials:'Study Materials',exams:'Exams & Date Sheet',attendance:'Attendance',fees:'Fees',results:'Results',notifications:'Notifications',profile:'My Profile'})[state.page]||'Dashboard'}
-function go(p){state.page=p;render();document.querySelector('.side')?.classList.remove('open')}
+function go(p){state.page=p;if(state.view==='admin')persistSession('admin');else if(state.view==='student')persistSession('student',get().student?.admissionNo||'');render();document.querySelector('.side')?.classList.remove('open')}
 function studentAcademicScope(d,me){const cls=(d.classes||[]).find(c=>c.id===me?.classId);return {classId:me?.classId||'',className:String(cls?.name||me?.className||'').trim().toLowerCase(),courseId:me?.courseId||cls?.courseId||''}}
 function academicPublished(x){return !x.status||String(x.status).trim().toLowerCase()==='published'}
 function academicVisibleToStudent(d,x,scope){if(!academicPublished(x))return false;if(!x.classId)return true;if(scope.classId&&String(x.classId)===String(scope.classId))return true;const xc=(d.classes||[]).find(c=>String(c.id)===String(x.classId));const xname=String(x.className||xc?.name||'').trim().toLowerCase();return !!(scope.className&&xname&&scope.className===xname)}
@@ -191,7 +209,17 @@ function render(){const app=document.getElementById('app');document.body.classLi
 function showLanding(){showLogin('student')}function showLogin(mode='student'){state.view='login';state.loginMode=mode;render()}async function doLogin(mode){
   const id=(document.getElementById('loginId')?.value||'').trim();
   const pass=document.getElementById('loginPass')?.value||'';
-  if(supabaseClient) await hydrateFromCloud({preferCloud:true});
+  if(supabaseClient){
+    const synced=await hydrateFromCloud({preferCloud:true});
+    if(cloudLastError){toast('Cloud connection error: '+cloudLastError);return;}
+    if(!synced&&!cloudReady){
+      const localAuth=get();
+      if(mode==='admin'&&id.toLowerCase()==='admin'&&pass===String(localAuth.adminPassword||seed.adminPassword)){
+        const bootstrapped=await cloudWrite(localAuth);
+        if(!bootstrapped){toast('Cloud setup failed: '+(cloudLastError||'check Supabase SQL setup and policies.'));return;}
+      }else{toast('Shared LMS data is not initialized yet. Sign in as administrator on the main laptop first.');return;}
+    }
+  }else{toast('Cloud login is unavailable because the Supabase client did not load. Check your internet/CDN connection.');return;}
   const d=get();
   if(mode==='student'){
     const st=(d.students||[]).find(x=>String(x.admissionNo||'').trim().toLowerCase()===id.toLowerCase() && String(x.password||'')===pass);
@@ -199,7 +227,7 @@ function showLanding(){showLogin('student')}function showLogin(mode='student'){s
       d.student={...st};
       save(d);
       sessionStorage.eduiqStudent='1';
-      state.student=true; state.admin=false; state.view='student'; state.page='dashboard';
+      state.student=true; state.admin=false; state.view='student'; state.page='dashboard';persistSession('student',st.admissionNo);
       render();
       if(st.mustChangePassword)setTimeout(()=>showFirstLoginPrompt('student'),80);
       return;
@@ -207,9 +235,9 @@ function showLanding(){showLogin('student')}function showLogin(mode='student'){s
   } else if(mode==='admin'){
     if(id.toLowerCase()==='admin' && pass===String(d.adminPassword||'EduIQ#2026')){
       sessionStorage.eduiqAdmin='1';
-      state.admin=true; state.student=false; state.view='admin'; state.page='admin';
+      state.admin=true; state.student=false; state.view='admin'; state.page='admin';persistSession('admin');
       // Push the PC's existing local data only when the cloud has no snapshot; otherwise keep cloud authoritative.
-      if(supabaseClient){const row=await cloudRead();if(!row?.payload)await cloudWrite(get());}
+      if(supabaseClient){const row=await cloudRead();if(!cloudLastError&&!row?.payload){const saved=await cloudWrite(get());if(!saved)toast('Signed in locally, but cloud sync failed: '+cloudLastError);}}
       render();
       if(d.mustChangeAdminPassword!==false)setTimeout(()=>showFirstLoginPrompt('admin'),80);
       return;
@@ -218,6 +246,6 @@ function showLanding(){showLogin('student')}function showLogin(mode='student'){s
   toast('Invalid credentials. Check your ID and password.');
 }
 function openNotificationCenter(){const d=get(),isAdmin=state.view==='admin',student=currentStudentRecord(d);const items=isAdmin?[...(d.notifications||[]).map(x=>({...x,title:x.title||'Notification',meta:x.category||'Notice',time:x.time||'Now'})),...(d.announcements||[]).map(x=>({title:x.title||'Announcement',meta:x.category||'Announcement',time:x.createdAt||'Now'}))].slice(0,12):[...(d.notifications||[]).map(x=>({...x,title:x.title||'Notification',meta:x.category||'Notice',time:x.time||'Now'})),...(d.announcements||[]).filter(x=>!x.classId||x.classId===student?.classId).map(x=>({title:x.title||'Announcement',meta:x.category||'Announcement',time:x.createdAt||'Now'}))].slice(0,12);document.getElementById('notificationModal')?.remove();document.body.insertAdjacentHTML('beforeend',`<div class="modal-back notification-back" id="notificationModal" onclick="if(event.target===this)this.remove()"><div class="modal notification-modal"><button class="modal-x" onclick="document.getElementById('notificationModal').remove()">×</button><div class="eyebrow">NOTIFICATIONS</div><h2>Updates</h2><p class="muted">${items.length?'Your latest institutional updates.':'You are all caught up.'}</p><div class="notification-list">${items.length?items.map(x=>`<div class="notification-item"><span class="notification-icon">◌</span><div><b>${esc(x.title)}</b><small>${esc(x.meta||'Notice')} · ${formatDate(x.time)}</small></div></div>`).join(''):`<div class="empty-inline"><b>No notifications yet.</b><span>New announcements and reminders will appear here.</span></div>`}</div><div class="modal-actions"><button class="btn" onclick="document.getElementById('notificationModal').remove()">Close</button></div></div></div>`)}
-function showFirstLoginPrompt(role){const student=role==='student';document.body.insertAdjacentHTML('beforeend',`<div class="modal-back first-login-back" id="firstLoginModal"><div class="modal first-login-modal"><div class="first-login-icon">🔐</div><div class="eyebrow">FIRST SIGN-IN</div><h2>Change your password</h2><p class="muted">${student?'Your institution issued your initial password. For your security, change it before continuing.':'This is your first administrator sign-in. Set a new private password before continuing.'}</p><div class="modal-actions first-login-actions"><button class="btn" onclick="document.getElementById('firstLoginModal')?.remove();go('profile');setTimeout(()=>openPasswordModal('${role}'),120)">Change password</button><button class="linkbtn" onclick="document.getElementById('firstLoginModal')?.remove()">Later</button></div></div></div>`)}function openPasswordModal(role){const isStudent=role==='student';document.getElementById('modal')?.remove();document.body.insertAdjacentHTML('beforeend',`<div class="modal-back" id="modal"><div class="modal security-modal"><button class="modal-x" onclick="document.getElementById('modal').remove()">×</button><div class="eyebrow">ACCOUNT SECURITY</div><h2>Change password</h2><p class="muted">Use a strong password you will remember. Your current password is required for verification.</p><form onsubmit="event.preventDefault();changePassword('${role}')"><label>Current password<div class="input-wrap"><input id="currentPassword" type="password" required autocomplete="current-password"></div></label><label>New password<div class="input-wrap"><input id="newPassword" type="password" minlength="8" required autocomplete="new-password"></div></label><label>Confirm new password<div class="input-wrap"><input id="confirmPassword" type="password" minlength="8" required autocomplete="new-password"></div></label><small class="field-hint">Minimum 8 characters. Avoid sharing your password with anyone.</small><div class="modal-actions"><button type="button" class="btn" onclick="document.getElementById('modal').remove()">Cancel</button><button class="btn primary">Update password</button></div></form></div></div>`)}function changePassword(role){const current=document.getElementById('currentPassword').value,newPass=document.getElementById('newPassword').value,confirm=document.getElementById('confirmPassword').value;if(newPass!==confirm)return toast('New passwords do not match.');if(newPass.length<8)return toast('Password must be at least 8 characters.');if(current===newPass)return toast('New password must be different from the current password.');if(role==='student'){const d=get(),me=currentStudentRecord(d);if(!me||me.password!==current)return toast('Current password is incorrect.');me.password=newPass;me.mustChangePassword=false;d.student={...me};save(d);document.getElementById('modal')?.remove();document.getElementById('firstLoginModal')?.remove();toast('Password changed successfully.');go('profile')}else{const d=get();if(current!==String(d.adminPassword||'EduIQ#2026'))return toast('Current password is incorrect.');d.adminPassword=newPass;d.mustChangeAdminPassword=false;save(d);document.getElementById('modal')?.remove();document.getElementById('firstLoginModal')?.remove();toast('Administrator password changed successfully.');go('profile')}}function logout(){sessionStorage.clear();state.student=false;state.admin=false;state.page='dashboard';showLogin('student')}function toggleTheme(){document.body.classList.toggle('dark');localStorage.theme=document.body.classList.contains('dark')?'dark':'light'}
-render();
-prepareCloud().then(()=>{if(state.view!=='login'){render()}});
+function showFirstLoginPrompt(role){const student=role==='student';document.body.insertAdjacentHTML('beforeend',`<div class="modal-back first-login-back" id="firstLoginModal"><div class="modal first-login-modal"><div class="first-login-icon">🔐</div><div class="eyebrow">FIRST SIGN-IN</div><h2>Change your password</h2><p class="muted">${student?'Your institution issued your initial password. For your security, change it before continuing.':'This is your first administrator sign-in. Set a new private password before continuing.'}</p><div class="modal-actions first-login-actions"><button class="btn" onclick="document.getElementById('firstLoginModal')?.remove();go('profile');setTimeout(()=>openPasswordModal('${role}'),120)">Change password</button><button class="linkbtn" onclick="document.getElementById('firstLoginModal')?.remove()">Later</button></div></div></div>`)}function openPasswordModal(role){const isStudent=role==='student';document.getElementById('modal')?.remove();document.body.insertAdjacentHTML('beforeend',`<div class="modal-back" id="modal"><div class="modal security-modal"><button class="modal-x" onclick="document.getElementById('modal').remove()">×</button><div class="eyebrow">ACCOUNT SECURITY</div><h2>Change password</h2><p class="muted">Use a strong password you will remember. Your current password is required for verification.</p><form onsubmit="event.preventDefault();changePassword('${role}')"><label>Current password<div class="input-wrap"><input id="currentPassword" type="password" required autocomplete="current-password"></div></label><label>New password<div class="input-wrap"><input id="newPassword" type="password" minlength="8" required autocomplete="new-password"></div></label><label>Confirm new password<div class="input-wrap"><input id="confirmPassword" type="password" minlength="8" required autocomplete="new-password"></div></label><small class="field-hint">Minimum 8 characters. Avoid sharing your password with anyone.</small><div class="modal-actions"><button type="button" class="btn" onclick="document.getElementById('modal').remove()">Cancel</button><button class="btn primary">Update password</button></div></form></div></div>`)}function changePassword(role){const current=document.getElementById('currentPassword').value,newPass=document.getElementById('newPassword').value,confirm=document.getElementById('confirmPassword').value;if(newPass!==confirm)return toast('New passwords do not match.');if(newPass.length<8)return toast('Password must be at least 8 characters.');if(current===newPass)return toast('New password must be different from the current password.');if(role==='student'){const d=get(),me=currentStudentRecord(d);if(!me||me.password!==current)return toast('Current password is incorrect.');me.password=newPass;me.mustChangePassword=false;d.student={...me};save(d);document.getElementById('modal')?.remove();document.getElementById('firstLoginModal')?.remove();toast('Password changed successfully.');go('profile')}else{const d=get();if(current!==String(d.adminPassword||'EduIQ#2026'))return toast('Current password is incorrect.');d.adminPassword=newPass;d.mustChangeAdminPassword=false;save(d);document.getElementById('modal')?.remove();document.getElementById('firstLoginModal')?.remove();toast('Administrator password changed successfully.');go('profile')}}function logout(){clearPersistentSession();state.student=false;state.admin=false;state.page='dashboard';showLogin('student')}function toggleTheme(){document.body.classList.toggle('dark');localStorage.theme=document.body.classList.contains('dark')?'dark':'light'}
+// Restore the signed-in workspace after cloud hydration so refresh does not end the session.
+(async()=>{await prepareCloud();const restored=await restorePersistentSession();render();if(restored){const d=get();if(state.view==='student'){const me=currentStudentRecord(d);if(me?.mustChangePassword)setTimeout(()=>showFirstLoginPrompt('student'),100)}else if(state.view==='admin'&&d.mustChangeAdminPassword!==false)setTimeout(()=>showFirstLoginPrompt('admin'),100)}})();
