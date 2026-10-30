@@ -68,3 +68,11 @@ After deploying, hard-refresh each device (Ctrl+Shift+R) once. No database reset
 - V30 had an extra/misplaced character in the configured key, which caused the LMS to receive `Invalid API key` even though the direct diagnostic request succeeded.
 - Updated asset query versions to force browsers to fetch the corrected JavaScript and CSS.
 - No database reset or SQL changes are required for this key correction.
+
+
+## V32 cloud request correction
+
+- Uses the verified Supabase publishable key supplied for this project.
+- Sends only `apikey` and `Accept` on reads; sends JSON Content-Type only for requests with a body.
+- Disables browser caching for cloud state requests and includes the HTTP method in diagnostic errors.
+- No database reset or schema migration is required.

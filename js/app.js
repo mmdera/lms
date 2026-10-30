@@ -5,7 +5,7 @@ const SUPABASE_URL='https://pejsubxbgbcsfvjwsyes.supabase.co';
 const SUPABASE_ANON_KEY='sb_publishable_62lxPzFVXCvGBWzON-mzRg_t0r5j-W';
 const CLOUD_STATE_ID='eduiq-main';
 const CLOUD_TABLE_URL=SUPABASE_URL+'/rest/v1/eduiq_app_state';
-const CLOUD_HEADERS={'apikey':SUPABASE_ANON_KEY,'Content-Type':'application/json'};
+const CLOUD_HEADERS={'apikey':SUPABASE_ANON_KEY,'Accept':'application/json'};
 let cloudReady=false,cloudBusy=false,cloudTimer=null,cloudLastError='';
 let cloudWriteQueue=Promise.resolve();
 function cloudPayload(d){const x=JSON.parse(JSON.stringify(normalize(d))); delete x.student; return x}
@@ -21,14 +21,20 @@ function cloudHasRealData(payload){try{return hasRealData(payload||{})}catch(e){
 function dataScore(d){const x=normalize(d||{});return (x.students?.length||0)*20+(x.courses?.length||0)*10+(x.classes?.length||0)*10+(x.academic?.length||0)*3+(x.results?.length||0)*3+(x.attendanceRecords?.length||0)*3+(x.schedule?.length||0)*2+Object.keys(x.classSchedules||{}).length*2+(x.notifications?.length||0)+(x.events?.length||0)+(x.announcements?.length||0)+Object.keys(x.studentFees||{}).length*3+(Number(x.fees?.total||0)>0?2:0)}
 async function cloudRequest(url,options={}){
   const controller=new AbortController();
-  const timer=setTimeout(()=>controller.abort(),15000);
+  const timer=setTimeout(()=>controller.abort(),20000);
+  const method=String(options.method||'GET').toUpperCase();
+  // Keep GET requests minimal: sending Content-Type: application/json on a
+  // body-less cross-origin request is unnecessary and can trigger avoidable
+  // browser preflight behavior. Only attach it when a JSON body is present.
+  const headers={...CLOUD_HEADERS,...(options.headers||{})};
+  if(options.body!==undefined && options.body!==null)headers['Content-Type']='application/json';
   try{
-    const response=await fetch(url,{...options,headers:{...CLOUD_HEADERS,...(options.headers||{})},signal:controller.signal});
+    const response=await fetch(url,{...options,method,headers,cache:'no-store',signal:controller.signal});
     const body=await response.text();
     if(!response.ok){
       let detail=body;
-      try{const parsed=JSON.parse(body);detail=parsed.message||parsed.error||body}catch(e){}
-      throw new Error('Supabase HTTP '+response.status+': '+detail);
+      try{const parsed=JSON.parse(body);detail=parsed.message||parsed.error_description||parsed.error||body}catch(e){}
+      throw new Error('Supabase '+method+' HTTP '+response.status+': '+detail);
     }
     if(!body)return null;
     try{return JSON.parse(body)}catch(e){return body}
