@@ -4,7 +4,8 @@ const seed={adminPassword:'EduIQ#2026',mustChangeAdminPassword:true,student:null
 const SUPABASE_URL='https://pejsubxbgbcsfvjwsyes.supabase.co';
 const SUPABASE_ANON_KEY='sb_publishable_62lxPzFVXCvGBWzON-mzRg_t0r5jW-Wg';
 const CLOUD_STATE_ID='eduiq-main';
-const supabaseClient=(window.supabase&&window.supabase.createClient)?window.supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY):null;
+const CLOUD_TABLE_URL=SUPABASE_URL+'/rest/v1/eduiq_app_state';
+const CLOUD_HEADERS={'apikey':SUPABASE_ANON_KEY,'Content-Type':'application/json'};
 let cloudReady=false,cloudBusy=false,cloudTimer=null,cloudLastError='';
 let cloudWriteQueue=Promise.resolve();
 function cloudPayload(d){const x=JSON.parse(JSON.stringify(normalize(d))); delete x.student; return x}
@@ -18,27 +19,43 @@ function hasRealData(d){
 }
 function cloudHasRealData(payload){try{return hasRealData(payload||{})}catch(e){return false}}
 function dataScore(d){const x=normalize(d||{});return (x.students?.length||0)*20+(x.courses?.length||0)*10+(x.classes?.length||0)*10+(x.academic?.length||0)*3+(x.results?.length||0)*3+(x.attendanceRecords?.length||0)*3+(x.schedule?.length||0)*2+Object.keys(x.classSchedules||{}).length*2+(x.notifications?.length||0)+(x.events?.length||0)+(x.announcements?.length||0)+Object.keys(x.studentFees||{}).length*3+(Number(x.fees?.total||0)>0?2:0)}
+async function cloudRequest(url,options={}){
+  const controller=new AbortController();
+  const timer=setTimeout(()=>controller.abort(),15000);
+  try{
+    const response=await fetch(url,{...options,headers:{...CLOUD_HEADERS,...(options.headers||{})},signal:controller.signal});
+    const body=await response.text();
+    if(!response.ok){
+      let detail=body;
+      try{const parsed=JSON.parse(body);detail=parsed.message||parsed.error||body}catch(e){}
+      throw new Error('Supabase HTTP '+response.status+': '+detail);
+    }
+    if(!body)return null;
+    try{return JSON.parse(body)}catch(e){return body}
+  }catch(e){
+    if(e.name==='AbortError')throw new Error('Supabase request timed out. Check the internet connection.');
+    throw e;
+  }finally{clearTimeout(timer)}
+}
 async function cloudRead(){
   cloudLastError='';
-  if(!supabaseClient){cloudLastError='Supabase client did not load. Check the internet connection or CDN access.';return null;}
   try{
-    const {data,error}=await supabaseClient.from('eduiq_app_state').select('payload,updated_at').eq('id',CLOUD_STATE_ID).maybeSingle();
-    if(error){cloudLastError=error.message||'Unable to read the shared LMS database.';console.warn('EduIQ cloud read:',cloudLastError);return null}
-    return data||null;
-  }catch(e){cloudLastError=e?.message||'Unable to connect to the shared LMS database.';console.warn('EduIQ cloud read failed:',e);return null}
+    const rows=await cloudRequest(CLOUD_TABLE_URL+'?select=payload,updated_at&id=eq.'+encodeURIComponent(CLOUD_STATE_ID));
+    return Array.isArray(rows)?(rows[0]||null):null;
+  }catch(e){cloudLastError=e?.message||'Unable to read the shared LMS database.';console.warn('EduIQ cloud read:',cloudLastError);return null}
 }
 async function cloudWrite(d){
-  if(!supabaseClient){cloudLastError='Supabase client did not load. Check the internet connection or CDN access.';return false;}
-  // Serialize writes so a password/data update is never silently dropped when
-  // another autosave is still in flight.
   const snapshot=cloudPayload(d);
   const write=async()=>{
     cloudBusy=true;
     try{
-      const {error}=await supabaseClient.from('eduiq_app_state').upsert({id:CLOUD_STATE_ID,payload:snapshot,updated_at:new Date().toISOString()},{onConflict:'id'});
-      if(error){cloudLastError=error.message||'Unable to save to the shared LMS database.';console.warn('EduIQ cloud write:',cloudLastError);return false}
+      await cloudRequest(CLOUD_TABLE_URL+'?on_conflict=id',{
+        method:'POST',
+        headers:{'Prefer':'resolution=merge-duplicates,return=minimal'},
+        body:JSON.stringify({id:CLOUD_STATE_ID,payload:snapshot,updated_at:new Date().toISOString()})
+      });
       cloudReady=true;cloudLastError='';return true;
-    }catch(e){cloudLastError=e?.message||'Unable to save to the shared LMS database.';console.warn('EduIQ cloud write failed:',e);return false}
+    }catch(e){cloudLastError=e?.message||'Unable to save to the shared LMS database.';console.warn('EduIQ cloud write:',cloudLastError);return false}
     finally{cloudBusy=false}
   };
   const task=cloudWriteQueue.then(write,write);
@@ -56,22 +73,16 @@ function hasSyncableData(d){
   return hasRealData(x) || String(x.adminPassword||seed.adminPassword)!==seed.adminPassword || x.mustChangeAdminPassword===false;
 }
 function queueCloudWrite(d){
-  // Admin credential changes are institution-wide data too; sync them even
-  // before students or academic records have been created.
   if(!hasSyncableData(d)&&!cloudReady)return;
   clearTimeout(cloudTimer);
   cloudTimer=setTimeout(()=>cloudWrite(d),500);
 }
 async function hydrateFromCloud({preferCloud=true}={}){
-  if(!supabaseClient){cloudLastError='Supabase client did not load. Check the internet connection or CDN access.';return false;}
   const local=get();
   const row=await cloudRead();
   if(cloudLastError)return false;
   const cloudData=row?.payload||null;
   if(row){
-    // An existing cloud row is authoritative even when its payload is empty.
-    // This is essential after an institution-wide reset: stale browser caches
-    // on another PC must never resurrect deleted records.
     if(preferCloud){
       const merged=normalize({...cloudData,student:local.student});
       localStorage[STORAGE_KEY]=JSON.stringify(merged);
@@ -79,15 +90,13 @@ async function hydrateFromCloud({preferCloud=true}={}){
     }
     return true;
   }
-  // Bootstrap only from a device that has institution data or a changed admin
-  // credential. A clean second device must never create an empty snapshot.
   if(hasSyncableData(local)){
     const ok=await cloudWrite(local);
     return ok;
   }
   return false;
 }
-async function prepareCloud(){if(!supabaseClient)return;await hydrateFromCloud({preferCloud:true});}
+async function prepareCloud(){await hydrateFromCloud({preferCloud:true});}
 
 const normalize=(raw)=>{const d=raw||JSON.parse(JSON.stringify(seed));d.student=d.student||null;d.courses=Array.isArray(d.courses)?d.courses:[];d.schedule=Array.isArray(d.schedule)?d.schedule:[];d.classSchedules=d.classSchedules&&typeof d.classSchedules==='object'?d.classSchedules:{};d.classes=Array.isArray(d.classes)?d.classes.map(c=>({...c,students:Number(c.students??0),subjects:Number(c.subjects??0),attendance:Number(c.attendance??0)})):[];d.students=Array.isArray(d.students)?d.students:[];d.attendanceRecords=Array.isArray(d.attendanceRecords)?d.attendanceRecords:[];d.academic=Array.isArray(d.academic)?d.academic:[];d.results=Array.isArray(d.results)?d.results:[];d.studentFees=d.studentFees&&typeof d.studentFees==='object'?d.studentFees:{};d.notifications=Array.isArray(d.notifications)?d.notifications:[];d.events=Array.isArray(d.events)?d.events:[];d.announcements=Array.isArray(d.announcements)?d.announcements:[];d.attendance=d.attendance&&typeof d.attendance==='object'?d.attendance:{overall:0,subjects:[]};d.attendance.overall=Number(d.attendance.overall||0);d.attendance.subjects=Array.isArray(d.attendance.subjects)?d.attendance.subjects:[];d.students.forEach(st=>{if(!d.studentFees[st.id])d.studentFees[st.id]={total:0,entries:[],assigned:false};d.studentFees[st.id].total=Number(d.studentFees[st.id].total||0);d.studentFees[st.id].entries=Array.isArray(d.studentFees[st.id].entries)?d.studentFees[st.id].entries:[];if(typeof d.studentFees[st.id].assigned!=='boolean')d.studentFees[st.id].assigned=d.studentFees[st.id].total>0});const main=d.student?d.students.find(x=>x.admissionNo===d.student.admissionNo):null;d.fees={total:Number(main?d.studentFees[main.id].total:0),entries:main?(d.studentFees[main.id].entries||[]):[]};d.fees.paid=d.fees.entries.reduce((a,x)=>a+Number(x.amount||0),0);return d};
 const LEGACY_KEYS=['eduiq_v10_clean','eduiq_v9','eduiq_v8'];
@@ -222,7 +231,7 @@ function render(){const app=document.getElementById('app');document.body.classLi
 function showLanding(){showLogin('student')}function showLogin(mode='student'){state.view='login';state.loginMode=mode;render()}async function doLogin(mode){
   const id=(document.getElementById('loginId')?.value||'').trim();
   const pass=document.getElementById('loginPass')?.value||'';
-  if(supabaseClient){
+  {
     const synced=await hydrateFromCloud({preferCloud:true});
     if(cloudLastError){toast('Cloud connection error: '+cloudLastError);return;}
     if(!synced&&!cloudReady){
@@ -232,7 +241,7 @@ function showLanding(){showLogin('student')}function showLogin(mode='student'){s
         if(!bootstrapped){toast('Cloud setup failed: '+(cloudLastError||'check Supabase SQL setup and policies.'));return;}
       }else{toast('Shared LMS data is not initialized yet. Sign in as administrator on the main laptop first.');return;}
     }
-  }else{toast('Cloud login is unavailable because the Supabase client did not load. Check your internet/CDN connection.');return;}
+  }
   const d=get();
   if(mode==='student'){
     const st=(d.students||[]).find(x=>String(x.admissionNo||'').trim().toLowerCase()===id.toLowerCase() && String(x.password||'')===pass);
@@ -250,7 +259,7 @@ function showLanding(){showLogin('student')}function showLogin(mode='student'){s
       sessionStorage.eduiqAdmin='1';
       state.admin=true; state.student=false; state.view='admin'; state.page='admin';persistSession('admin');
       // Push the PC's existing local data only when the cloud has no snapshot; otherwise keep cloud authoritative.
-      if(supabaseClient){const row=await cloudRead();if(!cloudLastError&&!row?.payload){const saved=await cloudWrite(get());if(!saved)toast('Signed in locally, but cloud sync failed: '+cloudLastError);}}
+      {const row=await cloudRead();if(!cloudLastError&&!row?.payload){const saved=await cloudWrite(get());if(!saved)toast('Signed in locally, but cloud sync failed: '+cloudLastError);}}
       render();
       if(d.mustChangeAdminPassword!==false)setTimeout(()=>showFirstLoginPrompt('admin'),80);
       return;

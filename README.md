@@ -50,3 +50,14 @@ If cloud access reports a database/table error, run `supabase/11_cloud_state_syn
 - Serializes cloud writes to prevent concurrent autosaves from being dropped.
 - Password changes now await a successful Supabase write and report sync failures clearly.
 - Uses the existing V28 cloud state and schema; no database reset or SQL migration is required.
+
+
+## V30 cloud connection fix
+
+- Replaced the Supabase JavaScript SDK calls used by the LMS cloud-state layer with direct PostgREST `fetch` requests.
+- Uses the verified publishable key in the `apikey` header, matching the successful browser diagnostic request.
+- Reads and upserts `eduiq_app_state` directly; the existing table and RLS policies remain required.
+- Removed the unused Supabase SDK CDN include to avoid duplicate GoTrue client initialization warnings.
+- Added `?v=30` cache-busting to the app JS and stylesheet references.
+
+After deploying, hard-refresh each device (Ctrl+Shift+R) once. No database reset is required.
