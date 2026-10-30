@@ -6,6 +6,7 @@ const SUPABASE_ANON_KEY='sb_publishable_62lxPzFVXCvGBWzON-mzRg_t0r5jW-Wg';
 const CLOUD_STATE_ID='eduiq-main';
 const supabaseClient=(window.supabase&&window.supabase.createClient)?window.supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY):null;
 let cloudReady=false,cloudBusy=false,cloudTimer=null,cloudLastError='';
+let cloudWriteQueue=Promise.resolve();
 function cloudPayload(d){const x=JSON.parse(JSON.stringify(normalize(d))); delete x.student; return x}
 function hasRealData(d){
   const x=normalize(d);
@@ -27,16 +28,28 @@ async function cloudRead(){
   }catch(e){cloudLastError=e?.message||'Unable to connect to the shared LMS database.';console.warn('EduIQ cloud read failed:',e);return null}
 }
 async function cloudWrite(d){
-  if(!supabaseClient||cloudBusy)return false;
-  cloudBusy=true;
-  try{
-    const payload=cloudPayload(d);
-    const {error}=await supabaseClient.from('eduiq_app_state').upsert({id:CLOUD_STATE_ID,payload,updated_at:new Date().toISOString()},{onConflict:'id'});
-    if(error){cloudLastError=error.message||'Unable to save to the shared LMS database.';console.warn('EduIQ cloud write:',cloudLastError);return false}
-    cloudReady=true;
-    return true;
-  }catch(e){cloudLastError=e?.message||'Unable to save to the shared LMS database.';console.warn('EduIQ cloud write failed:',e);return false}
-  finally{cloudBusy=false}
+  if(!supabaseClient){cloudLastError='Supabase client did not load. Check the internet connection or CDN access.';return false;}
+  // Serialize writes so a password/data update is never silently dropped when
+  // another autosave is still in flight.
+  const snapshot=cloudPayload(d);
+  const write=async()=>{
+    cloudBusy=true;
+    try{
+      const {error}=await supabaseClient.from('eduiq_app_state').upsert({id:CLOUD_STATE_ID,payload:snapshot,updated_at:new Date().toISOString()},{onConflict:'id'});
+      if(error){cloudLastError=error.message||'Unable to save to the shared LMS database.';console.warn('EduIQ cloud write:',cloudLastError);return false}
+      cloudReady=true;cloudLastError='';return true;
+    }catch(e){cloudLastError=e?.message||'Unable to save to the shared LMS database.';console.warn('EduIQ cloud write failed:',e);return false}
+    finally{cloudBusy=false}
+  };
+  const task=cloudWriteQueue.then(write,write);
+  cloudWriteQueue=task.then(()=>undefined,()=>undefined);
+  return task;
+}
+async function saveCloudImmediately(d){
+  clearTimeout(cloudTimer);
+  const ok=await cloudWrite(d);
+  if(!ok)throw new Error(cloudLastError||'Cloud save failed.');
+  return true;
 }
 function hasSyncableData(d){
   const x=normalize(d);
@@ -246,6 +259,33 @@ function showLanding(){showLogin('student')}function showLogin(mode='student'){s
   toast('Invalid credentials. Check your ID and password.');
 }
 function openNotificationCenter(){const d=get(),isAdmin=state.view==='admin',student=currentStudentRecord(d);const items=isAdmin?[...(d.notifications||[]).map(x=>({...x,title:x.title||'Notification',meta:x.category||'Notice',time:x.time||'Now'})),...(d.announcements||[]).map(x=>({title:x.title||'Announcement',meta:x.category||'Announcement',time:x.createdAt||'Now'}))].slice(0,12):[...(d.notifications||[]).map(x=>({...x,title:x.title||'Notification',meta:x.category||'Notice',time:x.time||'Now'})),...(d.announcements||[]).filter(x=>!x.classId||x.classId===student?.classId).map(x=>({title:x.title||'Announcement',meta:x.category||'Announcement',time:x.createdAt||'Now'}))].slice(0,12);document.getElementById('notificationModal')?.remove();document.body.insertAdjacentHTML('beforeend',`<div class="modal-back notification-back" id="notificationModal" onclick="if(event.target===this)this.remove()"><div class="modal notification-modal"><button class="modal-x" onclick="document.getElementById('notificationModal').remove()">×</button><div class="eyebrow">NOTIFICATIONS</div><h2>Updates</h2><p class="muted">${items.length?'Your latest institutional updates.':'You are all caught up.'}</p><div class="notification-list">${items.length?items.map(x=>`<div class="notification-item"><span class="notification-icon">◌</span><div><b>${esc(x.title)}</b><small>${esc(x.meta||'Notice')} · ${formatDate(x.time)}</small></div></div>`).join(''):`<div class="empty-inline"><b>No notifications yet.</b><span>New announcements and reminders will appear here.</span></div>`}</div><div class="modal-actions"><button class="btn" onclick="document.getElementById('notificationModal').remove()">Close</button></div></div></div>`)}
-function showFirstLoginPrompt(role){const student=role==='student';document.body.insertAdjacentHTML('beforeend',`<div class="modal-back first-login-back" id="firstLoginModal"><div class="modal first-login-modal"><div class="first-login-icon">🔐</div><div class="eyebrow">FIRST SIGN-IN</div><h2>Change your password</h2><p class="muted">${student?'Your institution issued your initial password. For your security, change it before continuing.':'This is your first administrator sign-in. Set a new private password before continuing.'}</p><div class="modal-actions first-login-actions"><button class="btn" onclick="document.getElementById('firstLoginModal')?.remove();go('profile');setTimeout(()=>openPasswordModal('${role}'),120)">Change password</button><button class="linkbtn" onclick="document.getElementById('firstLoginModal')?.remove()">Later</button></div></div></div>`)}function openPasswordModal(role){const isStudent=role==='student';document.getElementById('modal')?.remove();document.body.insertAdjacentHTML('beforeend',`<div class="modal-back" id="modal"><div class="modal security-modal"><button class="modal-x" onclick="document.getElementById('modal').remove()">×</button><div class="eyebrow">ACCOUNT SECURITY</div><h2>Change password</h2><p class="muted">Use a strong password you will remember. Your current password is required for verification.</p><form onsubmit="event.preventDefault();changePassword('${role}')"><label>Current password<div class="input-wrap"><input id="currentPassword" type="password" required autocomplete="current-password"></div></label><label>New password<div class="input-wrap"><input id="newPassword" type="password" minlength="8" required autocomplete="new-password"></div></label><label>Confirm new password<div class="input-wrap"><input id="confirmPassword" type="password" minlength="8" required autocomplete="new-password"></div></label><small class="field-hint">Minimum 8 characters. Avoid sharing your password with anyone.</small><div class="modal-actions"><button type="button" class="btn" onclick="document.getElementById('modal').remove()">Cancel</button><button class="btn primary">Update password</button></div></form></div></div>`)}function changePassword(role){const current=document.getElementById('currentPassword').value,newPass=document.getElementById('newPassword').value,confirm=document.getElementById('confirmPassword').value;if(newPass!==confirm)return toast('New passwords do not match.');if(newPass.length<8)return toast('Password must be at least 8 characters.');if(current===newPass)return toast('New password must be different from the current password.');if(role==='student'){const d=get(),me=currentStudentRecord(d);if(!me||me.password!==current)return toast('Current password is incorrect.');me.password=newPass;me.mustChangePassword=false;d.student={...me};save(d);document.getElementById('modal')?.remove();document.getElementById('firstLoginModal')?.remove();toast('Password changed successfully.');go('profile')}else{const d=get();if(current!==String(d.adminPassword||'EduIQ#2026'))return toast('Current password is incorrect.');d.adminPassword=newPass;d.mustChangeAdminPassword=false;save(d);document.getElementById('modal')?.remove();document.getElementById('firstLoginModal')?.remove();toast('Administrator password changed successfully.');go('profile')}}function logout(){clearPersistentSession();state.student=false;state.admin=false;state.page='dashboard';showLogin('student')}function toggleTheme(){document.body.classList.toggle('dark');localStorage.theme=document.body.classList.contains('dark')?'dark':'light'}
+function showFirstLoginPrompt(role){const student=role==='student';document.body.insertAdjacentHTML('beforeend',`<div class="modal-back first-login-back" id="firstLoginModal"><div class="modal first-login-modal"><div class="first-login-icon">🔐</div><div class="eyebrow">FIRST SIGN-IN</div><h2>Change your password</h2><p class="muted">${student?'Your institution issued your initial password. For your security, change it before continuing.':'This is your first administrator sign-in. Set a new private password before continuing.'}</p><div class="modal-actions first-login-actions"><button class="btn" onclick="document.getElementById('firstLoginModal')?.remove();go('profile');setTimeout(()=>openPasswordModal('${role}'),120)">Change password</button><button class="linkbtn" onclick="document.getElementById('firstLoginModal')?.remove()">Later</button></div></div></div>`)}function openPasswordModal(role){const isStudent=role==='student';document.getElementById('modal')?.remove();document.body.insertAdjacentHTML('beforeend',`<div class="modal-back" id="modal"><div class="modal security-modal"><button class="modal-x" onclick="document.getElementById('modal').remove()">×</button><div class="eyebrow">ACCOUNT SECURITY</div><h2>Change password</h2><p class="muted">Use a strong password you will remember. Your current password is required for verification.</p><form onsubmit="event.preventDefault();changePassword('${role}')"><label>Current password<div class="input-wrap"><input id="currentPassword" type="password" required autocomplete="current-password"></div></label><label>New password<div class="input-wrap"><input id="newPassword" type="password" minlength="8" required autocomplete="new-password"></div></label><label>Confirm new password<div class="input-wrap"><input id="confirmPassword" type="password" minlength="8" required autocomplete="new-password"></div></label><small class="field-hint">Minimum 8 characters. Avoid sharing your password with anyone.</small><div class="modal-actions"><button type="button" class="btn" onclick="document.getElementById('modal').remove()">Cancel</button><button class="btn primary">Update password</button></div></form></div></div>`)}async function changePassword(role){
+  const current=document.getElementById('currentPassword').value;
+  const newPass=document.getElementById('newPassword').value;
+  const confirm=document.getElementById('confirmPassword').value;
+  if(newPass!==confirm)return toast('New passwords do not match.');
+  if(newPass.length<8)return toast('Password must be at least 8 characters.');
+  if(current===newPass)return toast('New password must be different from the current password.');
+  const d=get();
+  if(role==='student'){
+    const me=currentStudentRecord(d);
+    if(!me||me.password!==current)return toast('Current password is incorrect.');
+    me.password=newPass;me.mustChangePassword=false;d.student={...me};
+  }else{
+    if(current!==String(d.adminPassword||seed.adminPassword))return toast('Current password is incorrect.');
+    d.adminPassword=newPass;d.mustChangeAdminPassword=false;
+  }
+  save(d);
+  try{
+    await saveCloudImmediately(d);
+    document.getElementById('modal')?.remove();
+    document.getElementById('firstLoginModal')?.remove();
+    toast('Password changed and synchronized across devices.');
+    go('profile');
+  }catch(e){
+    toast('Password changed on this device, but cloud sync failed: '+e.message+' Please retry before using another PC.');
+  }
+}
+function logout(){clearPersistentSession();state.student=false;state.admin=false;state.page='dashboard';showLogin('student')}function toggleTheme(){document.body.classList.toggle('dark');localStorage.theme=document.body.classList.contains('dark')?'dark':'light'}
 // Restore the signed-in workspace after cloud hydration so refresh does not end the session.
 (async()=>{await prepareCloud();const restored=await restorePersistentSession();render();if(restored){const d=get();if(state.view==='student'){const me=currentStudentRecord(d);if(me?.mustChangePassword)setTimeout(()=>showFirstLoginPrompt('student'),100)}else if(state.view==='admin'&&d.mustChangeAdminPassword!==false)setTimeout(()=>showFirstLoginPrompt('admin'),100)}})();

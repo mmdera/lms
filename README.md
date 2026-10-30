@@ -44,3 +44,9 @@ If cloud access reports a database/table error, run `supabase/11_cloud_state_syn
 - Student sessions are restored only if the matching admission number still exists in the current student list.
 - The Sign out button explicitly clears the persistent session. Clearing site data or using a different browser/device still requires signing in again.
 - This is a convenience session mechanism for the current demo architecture, not a substitute for server-side Supabase Auth. Anyone with access to the same unlocked browser profile may access its active session; use Sign out on shared computers.
+
+
+## V29 update
+- Serializes cloud writes to prevent concurrent autosaves from being dropped.
+- Password changes now await a successful Supabase write and report sync failures clearly.
+- Uses the existing V28 cloud state and schema; no database reset or SQL migration is required.
